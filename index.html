@@ -1,0 +1,1008 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>8-Bit 復古小精靈迷宮</title>
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- 8-Bit Pixel 復古字體 -->
+    <link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap" rel="stylesheet">
+    <style>
+        body {
+            font-family: 'Press Start 2P', monospace, cursive;
+            background-color: #05050d;
+            color: #ffffff;
+            touch-action: none; /* 防止手機上拖拽造成頁面滾動 */
+            overflow: hidden;
+            user-select: none;
+        }
+
+        .pixel-shadow {
+            text-shadow: 3px 3px 0px #ff0055, -2px -2px 0px #00f0ff;
+        }
+
+        .pixel-box {
+            border: 4px solid #3b82f6;
+            box-shadow: 0 0 15px rgba(59, 130, 246, 0.5), inset 0 0 10px rgba(59, 130, 246, 0.3);
+        }
+
+        .pixel-btn {
+            border: 3px solid #facc15;
+            box-shadow: 0 4px 0 #ca8a04;
+            transition: all 0.1s ease;
+        }
+
+        .pixel-btn:active {
+            transform: translateY(4px);
+            box-shadow: 0 0 0 #ca8a04;
+        }
+
+        /* 隱藏滾動條 */
+        ::-webkit-scrollbar {
+            display: none;
+        }
+    </style>
+</head>
+<body class="w-screen h-screen flex flex-col items-center justify-between p-2 sm:p-4 select-none">
+
+    <!-- 上方 UI 資訊欄 -->
+    <header class="w-full max-w-2xl flex flex-wrap items-center justify-between gap-2 p-3 bg-gray-950 rounded-xl pixel-box z-10 text-xs sm:text-sm">
+        <div class="flex items-center space-x-4">
+            <div>
+                <span class="text-yellow-400 block text-[10px] sm:text-xs">SCORE</span>
+                <span id="scoreText" class="text-white text-sm sm:text-base">00000</span>
+            </div>
+            <div>
+                <span class="text-cyan-400 block text-[10px] sm:text-xs">LEVEL</span>
+                <span id="levelText" class="text-yellow-300 text-sm sm:text-base">1 / 5</span>
+            </div>
+        </div>
+
+        <div class="flex items-center space-x-4">
+            <!-- 生命值圖示 -->
+            <div class="flex items-center space-x-1">
+                <span class="text-red-500 text-[10px] sm:text-xs mr-1 block">LIVES:</span>
+                <div id="livesContainer" class="flex space-x-1">
+                    <!-- JS 動態插入生命圖示 -->
+                </div>
+            </div>
+
+            <!-- 音效開關按鈕 -->
+            <button id="audioBtn" class="p-2 bg-gray-800 hover:bg-gray-700 rounded-lg text-yellow-400 border border-yellow-500 text-xs focus:outline-none">
+                🔊 音效: 開
+            </button>
+        </div>
+    </header>
+
+    <!-- 主遊戲 Canvas 畫布區塊 -->
+    <main class="relative flex-1 w-full max-w-2xl flex items-center justify-center my-2">
+        <canvas id="gameCanvas" class="bg-black rounded-lg shadow-2xl pixel-box cursor-pointer border-2 border-blue-600"></canvas>
+
+        <!-- 遊戲開始 / 暫停 / 關卡切換 / GAME OVER / VICTORY 彈窗 -->
+        <div id="overlay" class="absolute inset-0 bg-black/85 backdrop-blur-md flex flex-col items-center justify-center p-6 text-center rounded-lg z-20">
+            <h1 id="overlayTitle" class="text-2xl sm:text-4xl text-yellow-400 mb-4 pixel-shadow tracking-widest leading-relaxed">
+                8-BIT 小精靈
+            </h1>
+            <p id="overlayDesc" class="text-xs sm:text-sm text-cyan-300 mb-6 leading-relaxed max-w-md">
+                【操作說明】<br>
+                手指或滑鼠點擊迷宮任意位置，小精靈將自動尋路前往目的地！
+            </p>
+            <button id="startBtn" class="pixel-btn bg-yellow-400 text-black px-6 py-3 text-sm sm:text-base font-bold rounded hover:bg-yellow-300">
+                開始遊戲
+            </button>
+        </div>
+    </main>
+
+    <!-- 底部說明與版權 -->
+    <footer class="text-[10px] text-gray-500 text-center py-1">
+        8-BIT PAC-MAN RETRO EDITION • 點擊畫布即刻尋路移動
+    </footer>
+
+    <!-- 遊戲邏輯與 Web Audio 核心腳本 -->
+    <script>
+        /**
+         * Web Audio API 8-Bit Chiptune 音效與音樂合成器
+         */
+        class SoundFX {
+            constructor() {
+                this.ctx = null;
+                this.enabled = true;
+                this.bgmTimer = null;
+                this.bgmStep = 0;
+            }
+
+            init() {
+                if (!this.ctx) {
+                    const AudioContext = window.AudioContext || window.webkitAudioContext;
+                    this.ctx = new AudioContext();
+                }
+                if (this.ctx.state === 'suspended') {
+                    this.ctx.resume();
+                }
+            }
+
+            toggleSound() {
+                this.enabled = !this.enabled;
+                if (!this.enabled) {
+                    this.stopBGM();
+                } else {
+                    this.startBGM();
+                }
+                return this.enabled;
+            }
+
+            playTone(freq, type, duration, gainVal = 0.1) {
+                if (!this.enabled || !this.ctx) return;
+                try {
+                    const osc = this.ctx.createOscillator();
+                    const gain = this.ctx.createGain();
+                    osc.type = type; // 'square', 'triangle', 'sawtooth', 'sine'
+                    osc.frequency.setValueAtTime(freq, this.ctx.currentTime);
+                    
+                    gain.gain.setValueAtTime(gainVal, this.ctx.currentTime);
+                    gain.gain.exponentialRampToValueAtTime(0.0001, this.ctx.currentTime + duration);
+
+                    osc.connect(gain);
+                    gain.connect(this.ctx.destination);
+
+                    osc.start();
+                    osc.stop(this.ctx.currentTime + duration);
+                } catch (e) {
+                    console.error(e);
+                }
+            }
+
+            // 吃豆子音效 (Waka Waka 雙音高)
+            playWaka(alt) {
+                if (!this.enabled) return;
+                this.init();
+                const freq = alt ? 440 : 330;
+                this.playTone(freq, 'triangle', 0.08, 0.15);
+            }
+
+            // 吃大力丸音效
+            playPowerPellet() {
+                if (!this.enabled) return;
+                this.init();
+                this.playTone(600, 'square', 0.15, 0.2);
+                setTimeout(() => this.playTone(850, 'square', 0.15, 0.2), 80);
+            }
+
+            // 吃掉幽靈音效
+            playEatGhost() {
+                if (!this.enabled) return;
+                this.init();
+                const notes = [300, 450, 600, 800, 1000];
+                notes.forEach((freq, idx) => {
+                    setTimeout(() => this.playTone(freq, 'square', 0.08, 0.2), idx * 50);
+                });
+            }
+
+            // 死亡音效
+            playDeath() {
+                if (!this.enabled) return;
+                this.init();
+                for (let i = 0; i < 10; i++) {
+                    setTimeout(() => {
+                        this.playTone(500 - i * 40, 'sawtooth', 0.08, 0.2);
+                    }, i * 60);
+                }
+            }
+
+            // 過關勝利旋律
+            playVictory() {
+                if (!this.enabled) return;
+                this.init();
+                const melody = [
+                    { f: 261, d: 0.15 }, { f: 329, d: 0.15 }, { f: 392, d: 0.15 },
+                    { f: 523, d: 0.3 },  { f: 392, d: 0.15 }, { f: 523, d: 0.5 }
+                ];
+                let time = 0;
+                melody.forEach(m => {
+                    setTimeout(() => this.playTone(m.f, 'square', m.d, 0.25), time * 1000);
+                    time += m.d;
+                });
+            }
+
+            // 8-bit 背景音樂 (緊湊懸疑的小調低音脈衝節奏)
+            startBGM() {
+                if (!this.enabled || this.bgmTimer) return;
+                this.init();
+                // 採用 D 小調與減和弦音階，營造緊迫追逐感
+                const bgmNotes = [
+                    146.83, 146.83, 174.61, 146.83, 220.00, 207.65, 196.00, 174.61, // D3, F3, A3, Ab3, G3, F3
+                    146.83, 146.83, 174.61, 146.83, 233.08, 220.00, 196.00, 164.81  // D3, F3, Bb3, A3, G3, E3
+                ];
+                this.bgmStep = 0;
+                this.bgmTimer = setInterval(() => {
+                    if (this.enabled) {
+                        const stepIdx = this.bgmStep % bgmNotes.length;
+                        const freq = bgmNotes[stepIdx];
+                        // 改用更具顆粒感與張力的方波 (square) 與鋸齒波 (sawtooth) 交替
+                        const waveType = (stepIdx % 4 === 0) ? 'sawtooth' : 'square';
+                        this.playTone(freq, waveType, 0.09, 0.065);
+                        this.bgmStep++;
+                    }
+                }, 125); // 加快節拍速度至 125ms，增強緊湊感
+            }
+
+            stopBGM() {
+                if (this.bgmTimer) {
+                    clearInterval(this.bgmTimer);
+                    this.bgmTimer = null;
+                }
+            }
+        }
+
+        const soundFX = new SoundFX();
+
+        /**
+         * 5 個關卡的迷宮地圖資料庫 (15 columns x 15 rows)
+         * 1: 牆壁
+         * 0: 普通豆子
+         * 2: 能量大力丸
+         * 3: 空地 (無豆子)
+         * 4: 幽靈出生點
+         */
+        const LEVEL_MAPS = [
+            // Level 1: 寬敞視野，上手容易
+            [
+                [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1],
+                [1,2,0,0,0,0,1,0,0,0,0,0,0,2,1],
+                [1,0,1,1,1,0,1,0,1,1,1,1,1,0,1],
+                [1,0,1,0,0,0,0,0,0,0,0,0,1,0,1],
+                [1,0,1,0,1,1,3,3,3,1,1,0,1,0,1],
+                [1,0,0,0,1,3,4,4,4,3,1,0,0,0,1],
+                [1,1,1,0,1,3,4,4,4,3,1,0,1,1,1],
+                [3,3,1,0,3,3,3,3,3,3,3,0,1,3,3],
+                [1,1,1,0,1,1,1,1,1,1,1,0,1,1,1],
+                [1,0,0,0,0,0,0,1,0,0,0,0,0,0,1],
+                [1,0,1,1,1,1,0,1,0,1,1,1,1,0,1],
+                [1,0,0,0,1,0,0,0,0,0,1,0,0,0,1],
+                [1,1,1,0,1,0,1,1,1,0,1,0,1,1,1],
+                [1,2,0,0,0,0,0,1,0,0,0,0,0,2,1],
+                [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1]
+            ],
+            // Level 2: 增加迴廊
+            [
+                [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1],
+                [1,2,0,0,0,1,0,0,0,1,0,0,0,2,1],
+                [1,0,1,1,0,1,0,1,0,1,0,1,1,0,1],
+                [1,0,1,0,0,0,0,1,0,0,0,0,1,0,1],
+                [1,0,0,0,1,1,3,3,3,1,1,0,0,0,1],
+                [1,1,1,0,1,3,4,4,4,3,1,0,1,1,1],
+                [1,0,0,0,3,3,4,4,4,3,3,0,0,0,1],
+                [1,0,1,1,1,1,1,1,1,1,1,1,1,0,1],
+                [1,0,0,0,0,0,0,1,0,0,0,0,0,0,1],
+                [1,1,1,0,1,1,0,1,0,1,1,0,1,1,1],
+                [1,0,0,0,1,0,0,0,0,0,1,0,0,0,1],
+                [1,0,1,1,1,0,1,1,1,0,1,1,1,0,1],
+                [1,0,0,0,0,0,0,1,0,0,0,0,0,0,1],
+                [1,2,1,1,1,1,0,0,0,1,1,1,1,2,1],
+                [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1]
+            ],
+            // Level 3: 錯綜複雜的死角與十字路
+            [
+                [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1],
+                [1,2,0,0,1,0,0,0,0,0,1,0,0,2,1],
+                [1,0,1,0,1,0,1,1,1,0,1,0,1,0,1],
+                [1,0,1,0,0,0,0,1,0,0,0,0,1,0,1],
+                [1,0,1,1,1,1,3,3,3,1,1,1,1,0,1],
+                [1,0,0,0,0,1,4,4,4,1,0,0,0,0,1],
+                [1,1,1,1,0,3,4,4,4,3,0,1,1,1,1],
+                [3,3,3,1,0,1,1,1,1,1,0,1,3,3,3],
+                [1,1,1,1,0,0,0,1,0,0,0,1,1,1,1],
+                [1,0,0,0,0,1,0,0,0,1,0,0,0,0,1],
+                [1,0,1,1,0,1,1,1,1,1,0,1,1,0,1],
+                [1,0,0,1,0,0,0,1,0,0,0,1,0,0,1],
+                [1,1,0,1,1,1,0,1,0,1,1,1,0,1,1],
+                [1,2,0,0,0,0,0,0,0,0,0,0,0,2,1],
+                [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1]
+            ],
+            // Level 4: 狹窄快速通道
+            [
+                [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1],
+                [1,2,0,0,0,0,0,1,0,0,0,0,0,2,1],
+                [1,0,1,1,1,1,0,1,0,1,1,1,1,0,1],
+                [1,0,1,0,0,0,0,0,0,0,0,0,1,0,1],
+                [1,0,1,0,1,1,3,3,3,1,1,0,1,0,1],
+                [1,0,0,0,1,3,4,4,4,3,1,0,0,0,1],
+                [1,0,1,0,1,3,4,4,4,3,1,0,1,0,1],
+                [1,0,1,0,3,3,3,3,3,3,3,0,1,0,1],
+                [1,0,1,1,1,1,0,1,0,1,1,1,1,0,1],
+                [1,0,0,0,0,0,0,1,0,0,0,0,0,0,1],
+                [1,1,1,0,1,1,1,1,1,1,1,0,1,1,1],
+                [1,0,0,0,1,0,0,0,0,0,1,0,0,0,1],
+                [1,0,1,1,1,0,1,1,1,0,1,1,1,0,1],
+                [1,2,0,0,0,0,0,1,0,0,0,0,0,2,1],
+                [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1]
+            ],
+            // Level 5: 終極迷宮（更多轉角與挑戰）
+            [
+                [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1],
+                [1,2,0,1,0,0,0,0,0,0,0,1,0,2,1],
+                [1,0,1,1,0,1,1,1,1,1,0,1,1,0,1],
+                [1,0,0,0,0,0,0,1,0,0,0,0,0,0,1],
+                [1,1,0,1,1,1,3,3,3,1,1,1,0,1,1],
+                [1,0,0,0,1,3,4,4,4,3,1,0,0,0,1],
+                [1,0,1,0,1,3,4,4,4,3,1,0,1,0,1],
+                [1,0,1,0,3,3,3,3,3,3,3,0,1,0,1],
+                [1,0,1,1,1,1,0,1,0,1,1,1,1,0,1],
+                [1,0,0,0,0,0,0,1,0,0,0,0,0,0,1],
+                [1,0,1,1,1,1,0,1,0,1,1,1,1,0,1],
+                [1,0,0,0,1,0,0,0,0,0,1,0,0,0,1],
+                [1,1,1,0,1,0,1,1,1,0,1,0,1,1,1],
+                [1,2,0,0,0,0,0,1,0,0,0,0,0,2,1],
+                [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1]
+            ]
+        ];
+
+        // 幽靈顏色與特性設定
+        const GHOST_CONFIGS = [
+            { name: "Blinky", color: "#ff0000" }, // 紅
+            { name: "Pinky",  color: "#ffb8ff" }, // 粉
+            { name: "Inky",   color: "#00ffff" }, // 青
+            { name: "Clyde",  color: "#ffb852" }, // 橘
+            { name: "Sue",    color: "#a855f7" }  // 紫 (第5關登場)
+        ];
+
+        /**
+         * 遊戲主程式類別
+         */
+        class PacmanGame {
+            constructor() {
+                this.canvas = document.getElementById('gameCanvas');
+                this.ctx = this.canvas.getContext('2d');
+                
+                // UI 元素
+                this.scoreText = document.getElementById('scoreText');
+                this.levelText = document.getElementById('levelText');
+                this.livesContainer = document.getElementById('livesContainer');
+                this.overlay = document.getElementById('overlay');
+                this.overlayTitle = document.getElementById('overlayTitle');
+                this.overlayDesc = document.getElementById('overlayDesc');
+                this.startBtn = document.getElementById('startBtn');
+                this.audioBtn = document.getElementById('audioBtn');
+
+                // 地圖大小
+                this.cols = 15;
+                this.rows = 15;
+                this.tileSize = 32;
+
+                // 狀態變數
+                this.currentLevel = 1;
+                this.score = 0;
+                this.lives = 3;
+                this.gameState = 'START'; // 'START', 'PLAYING', 'GAMEOVER', 'VICTORY'
+                
+                // 實體
+                this.map = JSON.parse(JSON.stringify(LEVEL_MAPS[0])); // 預設預載第一關地圖作為背景
+                this.totalPellets = 0;
+                this.eatenPellets = 0;
+                this.pacman = null;
+                this.ghosts = [];
+                
+                // 大力丸狀態
+                this.frightenedTimer = 0;
+                this.frightenedDuration = 8000; // 8秒
+
+                // 點擊/觸控引導目標點
+                this.targetPoint = null; // {x, y} tile position
+
+                // 自動尺寸調整
+                this.resizeCanvas();
+                window.addEventListener('resize', () => this.resizeCanvas());
+
+                // 事件監聽
+                this.initEvents();
+            }
+
+            resizeCanvas() {
+                const maxW = Math.min(window.innerWidth - 32, 600);
+                const maxH = Math.min(window.innerHeight - 180, 600);
+                const size = Math.min(maxW, maxH);
+                
+                this.canvas.width = size;
+                this.canvas.height = size;
+                this.tileSize = size / this.cols;
+            }
+
+            initEvents() {
+                // 開始 / 重來按鈕
+                this.startBtn.addEventListener('click', () => {
+                    soundFX.init();
+                    soundFX.startBGM();
+                    if (this.gameState === 'VICTORY' || this.gameState === 'GAMEOVER') {
+                        this.score = 0;
+                        this.lives = 3;
+                        this.currentLevel = 1;
+                    }
+                    this.startLevel(this.currentLevel);
+                });
+
+                // 音效切換
+                this.audioBtn.addEventListener('click', () => {
+                    const active = soundFX.toggleSound();
+                    this.audioBtn.innerHTML = active ? "🔊 音效: 開" : "🔇 音效: 關";
+                });
+
+                // Canvas 點擊與觸控移動引導
+                const handlePointer = (e) => {
+                    if (this.gameState !== 'PLAYING') return;
+                    e.preventDefault();
+
+                    const rect = this.canvas.getBoundingClientRect();
+                    const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+                    const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+
+                    const mouseX = clientX - rect.left;
+                    const mouseY = clientY - rect.top;
+
+                    const tileX = Math.floor(mouseX / this.tileSize);
+                    const tileY = Math.floor(mouseY / this.tileSize);
+
+                    // 確保點擊在畫布與可行走範圍內
+                    if (tileX >= 0 && tileX < this.cols && tileY >= 0 && tileY < this.rows) {
+                        if (this.map[tileY][tileX] !== 1) { // 不是牆壁
+                            this.targetPoint = { x: tileX, y: tileY };
+                            this.pacman.setTarget(tileX, tileY, this.map);
+                        }
+                    }
+                };
+
+                this.canvas.addEventListener('mousedown', handlePointer);
+                this.canvas.addEventListener('mousemove', (e) => {
+                    if (e.buttons === 1) handlePointer(e);
+                });
+                this.canvas.addEventListener('touchstart', handlePointer);
+                this.canvas.addEventListener('touchmove', handlePointer);
+            }
+
+            // 更新 UI 生命顯示 (像素風格圖示)
+            updateUI() {
+                this.scoreText.innerText = String(this.score).padStart(5, '0');
+                this.levelText.innerText = `${this.currentLevel} / 5`;
+
+                this.livesContainer.innerHTML = '';
+                for (let i = 0; i < this.lives; i++) {
+                    const lifeIcon = document.createElement('div');
+                    lifeIcon.className = "w-3 h-3 sm:w-4 sm:h-4 bg-yellow-400 rounded-full inline-block border border-yellow-600";
+                    lifeIcon.style.clipPath = "polygon(100% 0, 100% 100%, 0 50%)"; // 小金口形狀
+                    this.livesContainer.appendChild(lifeIcon);
+                }
+            }
+
+            // 載入關卡
+            startLevel(level) {
+                this.currentLevel = level;
+                this.gameState = 'PLAYING';
+                this.overlay.classList.add('hidden');
+                this.targetPoint = null;
+
+                // 深拷貝地圖
+                const rawMap = LEVEL_MAPS[level - 1];
+                this.map = JSON.parse(JSON.stringify(rawMap));
+                
+                // 計算總豆子數
+                this.totalPellets = 0;
+                this.eatenPellets = 0;
+                for (let r = 0; r < this.rows; r++) {
+                    for (let c = 0; c < this.cols; c++) {
+                        if (this.map[r][c] === 0 || this.map[r][c] === 2) {
+                            this.totalPellets++;
+                        }
+                    }
+                }
+
+                // 初始化 Pacman (在下方空地)
+                this.pacman = new Pacman(7, 9);
+
+                // 初始化幽靈 (數量隨關卡遞增：第1關1隻，第5關5隻)
+                this.ghosts = [];
+                const ghostCount = Math.min(level, 5);
+                const speeds = [0.045, 0.052, 0.06, 0.068, 0.078]; // 難度隨關卡速度提升
+
+                for (let i = 0; i < ghostCount; i++) {
+                    const cfg = GHOST_CONFIGS[i];
+                    // 幽靈於中央幽靈屋附近生成
+                    const spawnX = 6 + (i % 3);
+                    const spawnY = 5 + Math.floor(i / 3);
+                    this.ghosts.push(new Ghost(spawnX, spawnY, cfg.color, speeds[level - 1], i));
+                }
+
+                this.updateUI();
+            }
+
+            // Pac-man 重置位置 (扣生命時)
+            resetPositions() {
+                this.pacman.reset(7, 9);
+                this.ghosts.forEach((g, idx) => {
+                    const spawnX = 6 + (idx % 3);
+                    const spawnY = 5 + Math.floor(idx / 3);
+                    g.reset(spawnX, spawnY);
+                });
+                this.targetPoint = null;
+            }
+
+            // 大力丸觸發驚恐狀態
+            triggerFrightened() {
+                soundFX.playPowerPellet();
+                this.frightenedTimer = Date.now() + this.frightenedDuration;
+                this.ghosts.forEach(g => g.makeFrightened());
+            }
+
+            // 通關與結束判定
+            checkLevelComplete() {
+                if (this.eatenPellets >= this.totalPellets && this.totalPellets > 0) {
+                    soundFX.playVictory();
+                    if (this.currentLevel < 5) {
+                        this.gameState = 'LEVEL_CLEAR';
+                        this.overlayTitle.innerText = `關卡 ${this.currentLevel} 完成！`;
+                        this.overlayTitle.className = "text-2xl sm:text-3xl text-green-400 mb-4 pixel-shadow";
+                        this.overlayDesc.innerText = `太棒了！準備迎接第 ${this.currentLevel + 1} 關挑戰。`;
+                        this.startBtn.innerText = "進入下一關";
+                        this.overlay.classList.remove('hidden');
+                        this.currentLevel++;
+                    } else {
+                        // 全破 VICTORY
+                        this.gameState = 'VICTORY';
+                        this.overlayTitle.innerText = "🏆 全關卡破關 🏆";
+                        this.overlayTitle.className = "text-2xl sm:text-4xl text-yellow-300 mb-4 pixel-shadow";
+                        this.overlayDesc.innerText = `恭喜您挑戰成功！最終總分：${this.score}`;
+                        this.startBtn.innerText = "再次挑戰";
+                        this.overlay.classList.remove('hidden');
+                    }
+                }
+            }
+
+            // 生命用盡 Game Over
+            handleGameOver() {
+                soundFX.playDeath();
+                this.gameState = 'GAMEOVER';
+                this.overlayTitle.innerText = "GAME OVER";
+                this.overlayTitle.className = "text-2xl sm:text-4xl text-red-500 mb-4 pixel-shadow";
+                this.overlayDesc.innerText = `幽靈抓到了你！最終得分：${this.score}`;
+                this.startBtn.innerText = "重新開始";
+                this.overlay.classList.remove('hidden');
+            }
+
+            // 遊戲主循環
+            update() {
+                if (this.gameState !== 'PLAYING') return;
+
+                // 檢查驚恐計時
+                const isFrightened = Date.now() < this.frightenedTimer;
+
+                // 更新 Pacman 邏輯
+                const eatInfo = this.pacman.update(this.map);
+                if (eatInfo.atePellet) {
+                    this.score += 10;
+                    this.eatenPellets++;
+                    soundFX.playWaka(this.eatenPellets % 2 === 0);
+                    this.checkLevelComplete();
+                } else if (eatInfo.atePower) {
+                    this.score += 50;
+                    this.eatenPellets++;
+                    this.triggerFrightened();
+                    this.checkLevelComplete();
+                }
+                this.updateUI();
+
+                // 更新幽靈與碰撞
+                this.ghosts.forEach(ghost => {
+                    ghost.update(this.map, this.pacman, isFrightened);
+
+                    // 碰撞檢測 (距離判定)
+                    const dist = Math.hypot(this.pacman.x - ghost.x, this.pacman.y - ghost.y);
+                    if (dist < 0.6) {
+                        if (ghost.isFrightened) {
+                            // 吃掉幽靈
+                            soundFX.playEatGhost();
+                            this.score += 200;
+                            ghost.reset(7, 6); // 送回幽靈房
+                            ghost.isFrightened = false;
+                        } else {
+                            // 被幽靈抓到
+                            this.lives--;
+                            this.updateUI();
+                            if (this.lives <= 0) {
+                                this.handleGameOver();
+                            } else {
+                                soundFX.playDeath();
+                                this.resetPositions();
+                            }
+                        }
+                    }
+                });
+            }
+
+            // 繪製迷宮與元素
+            draw() {
+                this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+
+                if (!this.map || this.map.length === 0) return;
+
+                // 1. 繪製地圖牆壁與豆子
+                for (let r = 0; r < this.rows; r++) {
+                    if (!this.map[r]) continue;
+                    for (let c = 0; c < this.cols; c++) {
+                        const cell = this.map[r][c];
+                        const x = c * this.tileSize;
+                        const y = r * this.tileSize;
+
+                        if (cell === 1) {
+                            // 8-bit 霓虹藍像素牆
+                            this.ctx.fillStyle = '#1e3a8a';
+                            this.ctx.fillRect(x, y, this.tileSize, this.tileSize);
+                            this.ctx.strokeStyle = '#3b82f6';
+                            this.ctx.lineWidth = 2;
+                            this.ctx.strokeRect(x + 2, y + 2, this.tileSize - 4, this.tileSize - 4);
+                        } else if (cell === 0) {
+                            // 普通豆子 (黃色小方塊/微光圓)
+                            this.ctx.fillStyle = '#fde047';
+                            this.ctx.beginPath();
+                            this.ctx.arc(x + this.tileSize / 2, y + this.tileSize / 2, this.tileSize * 0.12, 0, Math.PI * 2);
+                            this.ctx.fill();
+                        } else if (cell === 2) {
+                            // 能量大力丸 (閃爍大豆子)
+                            if (Math.floor(Date.now() / 250) % 2 === 0) {
+                                this.ctx.fillStyle = '#ffedd5';
+                                this.ctx.shadowColor = '#fb923c';
+                                this.ctx.shadowBlur = 8;
+                                this.ctx.beginPath();
+                                this.ctx.arc(x + this.tileSize / 2, y + this.tileSize / 2, this.tileSize * 0.3, 0, Math.PI * 2);
+                                this.ctx.fill();
+                                this.ctx.shadowBlur = 0;
+                            }
+                        }
+                    }
+                }
+
+                // 2. 繪製點擊目標視覺提示光圈
+                if (this.targetPoint) {
+                    const tx = (this.targetPoint.x + 0.5) * this.tileSize;
+                    const ty = (this.targetPoint.y + 0.5) * this.tileSize;
+                    const pulse = (Math.sin(Date.now() / 150) + 1) * 3;
+
+                    this.ctx.strokeStyle = '#00f0ff';
+                    this.ctx.lineWidth = 2;
+                    this.ctx.beginPath();
+                    this.ctx.arc(tx, ty, this.tileSize * 0.3 + pulse, 0, Math.PI * 2);
+                    this.ctx.stroke();
+
+                    this.ctx.fillStyle = '#00f0ff';
+                    this.ctx.fillRect(tx - 2, ty - 2, 4, 4);
+                }
+
+                // 3. 繪製 Pac-Man 與 幽靈
+                if (this.gameState === 'PLAYING') {
+                    this.pacman.draw(this.ctx, this.tileSize);
+                    const isFrightened = Date.now() < this.frightenedTimer;
+                    this.ghosts.forEach(g => g.draw(this.ctx, this.tileSize, isFrightened));
+                }
+            }
+
+            loop() {
+                this.update();
+                this.draw();
+                requestAnimationFrame(() => this.loop());
+            }
+        }
+
+        /**
+         * Pac-Man 角色實體 (包含廣度優先 BFS 智慧尋路)
+         */
+        class Pacman {
+            constructor(x, y) {
+                this.reset(x, y);
+                this.speed = 0.085; // 移動速度
+            }
+
+            reset(x, y) {
+                this.x = x;
+                this.y = y;
+                this.dirX = 0;
+                this.dirY = 0;
+                this.mouthAngle = 0.2;
+                this.mouthSpeed = 0.03;
+                this.path = []; // BFS 尋路的格子路徑
+            }
+
+            // 設定點擊目標點並進行 BFS 尋路
+            setTarget(targetX, targetY, map) {
+                const startX = Math.round(this.x);
+                const startY = Math.round(this.y);
+
+                // BFS 廣度優先搜尋演算法尋找最快迷宮路徑
+                const queue = [[{ x: startX, y: startY }]];
+                const visited = new Set([`${startX},${startY}`]);
+                let foundPath = null;
+
+                while (queue.length > 0) {
+                    const path = queue.shift();
+                    const curr = path[path.length - 1];
+
+                    if (curr.x === targetX && curr.y === targetY) {
+                        foundPath = path;
+                        break;
+                    }
+
+                    const dirs = [
+                        { x: 0, y: -1 }, { x: 0, y: 1 },
+                        { x: -1, y: 0 }, { x: 1, y: 0 }
+                    ];
+
+                    for (const d of dirs) {
+                        const nx = curr.x + d.x;
+                        const ny = curr.y + d.y;
+
+                        if (nx >= 0 && nx < 15 && ny >= 0 && ny < 15) {
+                            if (map[ny][nx] !== 1 && !visited.has(`${nx},${ny}`)) {
+                                visited.add(`${nx},${ny}`);
+                                queue.push([...path, { x: nx, y: ny }]);
+                            }
+                        }
+                    }
+                }
+
+                if (foundPath && foundPath.length > 1) {
+                    this.path = foundPath.slice(1); // 移除當前起點
+                }
+            }
+
+            update(map) {
+                let eatInfo = { atePellet: false, atePower: false };
+
+                // 若有尋路目標，朝路徑節點移動
+                if (this.path.length > 0) {
+                    const target = this.path[0];
+                    const dx = target.x - this.x;
+                    const dy = target.y - this.y;
+                    const dist = Math.hypot(dx, dy);
+
+                    if (dist < this.speed) {
+                        this.x = target.x;
+                        this.y = target.y;
+                        this.path.shift(); // 抵達節點，取下一個
+                    } else {
+                        this.dirX = Math.sign(dx);
+                        this.dirY = Math.sign(dy);
+                        this.x += this.dirX * this.speed;
+                        this.y += this.dirY * this.speed;
+                    }
+                }
+
+                // 吃豆子檢測 (以目前所在網格)
+                const gridX = Math.round(this.x);
+                const gridY = Math.round(this.y);
+
+                if (gridX >= 0 && gridX < 15 && gridY >= 0 && gridY < 15) {
+                    if (map[gridY][gridX] === 0) {
+                        map[gridY][gridX] = 3; // 標記已吃掉
+                        eatInfo.atePellet = true;
+                    } else if (map[gridY][gridX] === 2) {
+                        map[gridY][gridX] = 3;
+                        eatInfo.atePower = true;
+                    }
+                }
+
+                // 嘴巴張合動畫
+                this.mouthAngle += this.mouthSpeed;
+                if (this.mouthAngle > 0.4 || this.mouthAngle < 0.05) {
+                    this.mouthSpeed = -this.mouthSpeed;
+                }
+
+                return eatInfo;
+            }
+
+            draw(ctx, tileSize) {
+                const px = (this.x + 0.5) * tileSize;
+                const py = (this.y + 0.5) * tileSize;
+                const radius = tileSize * 0.42;
+
+                // 依據移動方向計算旋轉角度
+                let rotation = 0;
+                if (this.dirX === 1) rotation = 0;
+                else if (this.dirX === -1) rotation = Math.PI;
+                else if (this.dirY === 1) rotation = Math.PI / 2;
+                else if (this.dirY === -1) rotation = -Math.PI / 2;
+
+                ctx.save();
+                ctx.translate(px, py);
+                ctx.rotate(rotation);
+
+                ctx.fillStyle = '#facc15'; // 經典亮黃色
+                ctx.beginPath();
+                ctx.arc(0, 0, radius, this.mouthAngle * Math.PI, (2 - this.mouthAngle) * Math.PI);
+                ctx.lineTo(0, 0);
+                ctx.fill();
+
+                ctx.restore();
+            }
+        }
+
+        /**
+         * 幽靈 (Ghost) 實體 AI
+         */
+        class Ghost {
+            constructor(x, y, color, speed, id) {
+                this.color = color;
+                this.baseSpeed = speed;
+                this.id = id;
+                this.reset(x, y);
+            }
+
+            reset(x, y) {
+                this.x = x;
+                this.y = y;
+                this.dirX = 0;
+                this.dirY = -1;
+                this.isFrightened = false;
+                this.lastDecisionTile = null; // 記錄上次轉彎決策的網格，防止在同一格無限重新決策發呆
+            }
+
+            makeFrightened() {
+                this.isFrightened = true;
+            }
+
+            update(map, pacman, isFrightenedGlobal) {
+                this.isFrightened = isFrightenedGlobal;
+                const currentSpeed = this.isFrightened ? this.baseSpeed * 0.6 : this.baseSpeed;
+
+                const gridX = Math.round(this.x);
+                const gridY = Math.round(this.y);
+                const distToCenter = Math.hypot(this.x - gridX, this.y - gridY);
+                const currentTileKey = `${gridX},${gridY}`;
+
+                // 抵達新網格的中心點，且尚未在此格做過決策時，才決定下一個方向
+                if (distToCenter <= currentSpeed && this.lastDecisionTile !== currentTileKey) {
+                    this.x = gridX;
+                    this.y = gridY;
+                    this.lastDecisionTile = currentTileKey;
+
+                    const possibleDirs = [];
+                    const dirs = [
+                        { x: 0, y: -1 }, { x: 0, y: 1 },
+                        { x: -1, y: 0 }, { x: 1, y: 0 }
+                    ];
+
+                    dirs.forEach(d => {
+                        // 不能直接 180 度回頭
+                        if (d.x !== -this.dirX || d.y !== -this.dirY) {
+                            const nx = gridX + d.x;
+                            const ny = gridY + d.y;
+                            if (nx >= 0 && nx < 15 && ny >= 0 && ny < 15 && map[ny][nx] !== 1) {
+                                possibleDirs.push(d);
+                            }
+                        }
+                    });
+
+                    // 死胡同時才允許回頭
+                    if (possibleDirs.length === 0) {
+                        const backX = gridX - this.dirX;
+                        const backY = gridY - this.dirY;
+                        if (backX >= 0 && backX < 15 && backY >= 0 && backY < 15 && map[backY][backX] !== 1) {
+                            possibleDirs.push({ x: -this.dirX, y: -this.dirY });
+                        } else {
+                            // 極端情況：找任意可走的方向
+                            dirs.forEach(d => {
+                                const nx = gridX + d.x;
+                                const ny = gridY + d.y;
+                                if (nx >= 0 && nx < 15 && ny >= 0 && ny < 15 && map[ny][nx] !== 1) {
+                                    possibleDirs.push(d);
+                                }
+                            });
+                        }
+                    }
+
+                    if (possibleDirs.length > 0) {
+                        let chosenDir = possibleDirs[0];
+
+                        if (this.isFrightened) {
+                            // 驚恐狀態：隨機逃竄
+                            chosenDir = possibleDirs[Math.floor(Math.random() * possibleDirs.length)];
+                        } else if (map[gridY][gridX] === 4) {
+                            // 如果還在幽靈屋(4)裡面，優先往上方出口移動，避免在屋內打轉
+                            chosenDir = possibleDirs.find(d => d.y === -1) || possibleDirs[Math.floor(Math.random() * possibleDirs.length)];
+                        } else {
+                            // 追擊 AI：計算哪一個方向離目標最近
+                            let targetX = pacman.x;
+                            let targetY = pacman.y;
+
+                            if (this.id === 1) { // Pinky 預測前端
+                                targetX += pacman.dirX * 2;
+                                targetY += pacman.dirY * 2;
+                            } else if (this.id === 3) { // Clyde 保持距離巡邏
+                                if (Math.hypot(this.x - pacman.x, this.y - pacman.y) < 4) {
+                                    targetX = 1; targetY = 13;
+                                }
+                            }
+
+                            let minDist = Infinity;
+                            possibleDirs.forEach(d => {
+                                const nx = gridX + d.x;
+                                const ny = gridY + d.y;
+                                const dist = Math.hypot(nx - targetX, ny - targetY);
+                                if (dist < minDist) {
+                                    minDist = dist;
+                                    chosenDir = d;
+                                }
+                            });
+                        }
+
+                        this.dirX = chosenDir.x;
+                        this.dirY = chosenDir.y;
+                    }
+                }
+
+                // 移動並防止穿牆保險機制
+                const nextX = this.x + this.dirX * currentSpeed;
+                const nextY = this.y + this.dirY * currentSpeed;
+                const checkGridX = Math.round(nextX + this.dirX * 0.45);
+                const checkGridY = Math.round(nextY + this.dirY * 0.45);
+
+                if (checkGridX >= 0 && checkGridX < 15 && checkGridY >= 0 && checkGridY < 15 && map[checkGridY][checkGridX] !== 1) {
+                    this.x = nextX;
+                    this.y = nextY;
+                } else {
+                    // 若前方即將撞牆，立刻清除決策鎖定以重新找路
+                    this.lastDecisionTile = null;
+                }
+            }
+
+            draw(ctx, tileSize, isFrightenedGlobal) {
+                const px = (this.x + 0.5) * tileSize;
+                const py = (this.y + 0.5) * tileSize;
+                const r = tileSize * 0.4;
+
+                ctx.save();
+                ctx.translate(px, py);
+
+                // 顏色：驚恐狀態為深藍色 (快結束時閃爍白色)
+                let bodyColor = this.color;
+                if (isFrightenedGlobal) {
+                    bodyColor = (Math.floor(Date.now() / 200) % 2 === 0) ? '#1e40af' : '#3b82f6';
+                }
+
+                ctx.fillStyle = bodyColor;
+                ctx.beginPath();
+                // 幽靈半圓頭部
+                ctx.arc(0, -r * 0.1, r, Math.PI, 0, false);
+                // 裙擺裙邊
+                ctx.lineTo(r, r);
+                ctx.lineTo(r * 0.5, r * 0.6);
+                ctx.lineTo(0, r);
+                ctx.lineTo(-r * 0.5, r * 0.6);
+                ctx.lineTo(-r, r);
+                ctx.closePath();
+                ctx.fill();
+
+                // 眼睛
+                ctx.fillStyle = '#ffffff';
+                ctx.beginPath();
+                ctx.arc(-r * 0.35, -r * 0.2, r * 0.25, 0, Math.PI * 2);
+                ctx.arc(r * 0.35, -r * 0.2, r * 0.25, 0, Math.PI * 2);
+                ctx.fill();
+
+                // 眼珠 (朝移動方向看)
+                ctx.fillStyle = isFrightenedGlobal ? '#f87171' : '#1e3a8a';
+                const eyeOffX = this.dirX * r * 0.1;
+                const eyeOffY = this.dirY * r * 0.1;
+                ctx.beginPath();
+                ctx.arc(-r * 0.35 + eyeOffX, -r * 0.2 + eyeOffY, r * 0.12, 0, Math.PI * 2);
+                ctx.arc(r * 0.35 + eyeOffX, -r * 0.2 + eyeOffY, r * 0.12, 0, Math.PI * 2);
+                ctx.fill();
+
+                ctx.restore();
+            }
+        }
+
+        // 啟動遊戲
+        window.onload = () => {
+            const game = new PacmanGame();
+            game.loop();
+        };
+    </script>
+</body>
+</html>
